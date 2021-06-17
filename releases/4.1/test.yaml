@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: machine-config-operatorXXX
+  namespace: openshift-machine-config-operator
+  labels:
+    k8s-app: machine-config-operator
+  annotations:
+    exclude.release.openshift.io/internal-openshift-hosted: "true"
+    include.release.openshift.io/self-managed-high-availability: "true"
+    include.release.openshift.io/single-node-developer: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: machine-config-operator
+  template:
+    metadata:
+      labels:
+        k8s-app: machine-config-operator
+    spec:
+      containers:
+      - name: machine-config-operator
+        image: registry.svc.ci.openshift.org/origin/4.8@sha256:4250fcc8949e3f5739ece27cc0d18feeb0c67a1bb3dd2eedfba292c2fb239494
+        args:
+        - "start"
+        - "--images-json=/etc/mco/images/images.json"
+        resources:
+          requests:
+            cpu: 20m
+            memory: 50Mi
+        env:
+          - name: RELEASE_VERSION
+            value: "0.0.1-2021-02-24-222453"
+        terminationMessagePolicy: FallbackToLogsOnError
+        volumeMounts:
+        - name: root-ca
+          mountPath: /etc/ssl/kubernetes/ca.crt
+        - name: images
+          mountPath: /etc/mco/images
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      priorityClassName: "system-cluster-critical"
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 120
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 120
+      volumes:
+      - name: images
+        configMap:
+          name: machine-config-operator-images
+      - name: root-ca
+        hostPath:
+          path: /etc/kubernetes/ca.crt
