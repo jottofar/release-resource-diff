@@ -1,7 +1,7 @@
 # release-resource-diff
 
 # Description
-Checks if OpenShift Container Platform (OCP) resources, as defined by the manifests for one or more OCP releases, exist in a given newly installed OCP release. The purpose is to produce a list of resources which could exist on an upgraded clusters but can and should be removed.
+release-resource-diff checks if OpenShift Container Platform (OCP) resources, as defined by the manifests for one or more OCP releases, exist in a given newly installed OCP release. The purpose is to produce a list of resources which could exist on an upgraded clusters but can and should be removed.
 
 # Usage
 
@@ -24,3 +24,4 @@ These subdirectory names are used to fill in the "Born In" column of the results
 
 Each subdirectory is then populated with the manifests from that release by running **"oc adm release extract"**.
 
+The program produces a file containing the results. By default the file is **"\<top-level dir\>/delete-candidates.txt"**. Use the "-o" option to override the default. The file is not display friendly so it is recommended that it be opened in a spreadsheet program such aas LibreOffice Calc for ease of viewing and to allow sorting.
