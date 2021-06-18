@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"gopkg.in/yaml.v2"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -30,19 +32,32 @@ type ResourceId struct {
 }
 
 type ResourceSource struct {
-	Release      string
-	YamlFileName string
+	Release       string
+	LastInRelease string
+	YamlFileName  string
 }
 
-var targetResources = make(map[ResourceId]bool)
+var (
+	targetResources = make(map[ResourceId]bool)
 
-var checkIt bool
+	verboseLogging bool
+
+	resultsFile string
+)
 
 func main() {
-	args := os.Args[1:]
+	flag.BoolVar(&verboseLogging, "v", false, "verbose logging")
+	flag.StringVar(&resultsFile, "o", "", "results file")
+	flag.Usage = usage
+	flag.Parse()
+
+	args := flag.Args()
 	if len(args) != 2 {
-		usage(args)
+		usage()
 		os.Exit(1)
+	}
+	if len(resultsFile) == 0 {
+		resultsFile = args[1] + "/delete-candidates.txt"
 	}
 	loadTargetResources(args[0])
 
@@ -55,21 +70,17 @@ func main() {
 
 	deleteCandidates := make(map[ResourceId]ResourceSource)
 	for _, dir := range releaseDirs {
-		fmt.Printf("%s\n", dir)
+		fmt.Printf("%s: ", dir)
 		resources := getReleaseResources(args[1] + "/" + dir)
-		deleteCandidates = checkIfOrphaned(resources, deleteCandidates)
+		fmt.Printf("%d resources checked\n", len(resources))
+		checkIfOrphaned(resources, deleteCandidates)
 	}
-	//fmt.Printf("Candidate resources for deletion:\n%v\n", deleteCandidates)
-
-	outputDeleteCandidates(args[1], deleteCandidates)
+	outputDeleteCandidates(deleteCandidates)
 }
 
-func usage(args []string) {
-	if len(args) == 0 {
-		fmt.Println("Expected arguments \"<target release file path> <top-level dir>\"")
-	} else {
-		fmt.Printf("Expected arguments \"<target release file path> <top-level dir>\"; got \"%v\"\n", args)
-	}
+func usage() {
+	fmt.Printf("Usage: %s [-o <results file path>] [-v] <target release file path> <top-level dir>\n", os.Args[0])
+	flag.PrintDefaults()
 }
 
 func loadTargetResources(path string) {
@@ -91,17 +102,16 @@ func loadTargetResources(path string) {
 	for _, eachline := range txtlines {
 		ids := strings.Fields(eachline)
 		if len(ids) != 4 {
-			fmt.Printf("The target release file should have 4 columns: group, kind, name, namespace. Found %s\n", eachline)
-			os.Exit(1)
+			log.Fatalf("The target release file should have 4 columns: group, kind, name, namespace. Found %s\n", eachline)
 		}
 		resourceId := ResourceId{
-			Group:     ids[0],
+			Group:     truncateVersion(ids[0]),
 			Kind:      ids[1],
 			Name:      ids[2],
 			Namespace: ids[3],
 		}
 		targetResources[resourceId] = true
-		//fmt.Printf("%v\n", resourceId)
+		logIt(fmt.Sprintf("%v", resourceId))
 	}
 }
 
@@ -121,25 +131,17 @@ func loadYamlFileDirs(dir string) []string {
 	return dirs
 }
 
-func logIt(s string) {
-	if checkIt {
-		fmt.Println(s)
-	}
-}
-
 func getReleaseResources(dir string) map[ResourceId]ResourceSource {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		log.Fatalf("Unable to read dir %s; err=%v", dir, err)
 	}
 
-	base := filepath.Base(dir)
+	minor := getMinorRelease(filepath.Base(dir))
 	ids := make(map[ResourceId]ResourceSource)
 
 	for _, file := range files {
 		info, _ := file.Info()
-
-		checkIt = info.Name() == "0000_50_cluster-ingress-operator_00-ingress-credentials-request.yaml"
 
 		if filepath.Ext(info.Name()) != ".yaml" {
 			continue
@@ -157,9 +159,11 @@ func getReleaseResources(dir string) map[ResourceId]ResourceSource {
 		}
 
 		resourceSource := ResourceSource{
-			Release:      base,
-			YamlFileName: info.Name(),
+			Release:       minor,
+			LastInRelease: minor,
+			YamlFileName:  info.Name(),
 		}
+		logIt(fmt.Sprintf("%v", resourceSource))
 		var yamlId ResourceIdYaml
 
 		for _, byteSlice := range allByteSlices {
@@ -168,24 +172,45 @@ func getReleaseResources(dir string) map[ResourceId]ResourceSource {
 				log.Fatalf("Unable to unmarshall yaml from file %s; err=%v", filename, err)
 			}
 			if !validKey(yamlId) {
-				log.Printf("Ignoring invalid resource key %v\n", yamlId)
+				logIt(fmt.Sprintf("Ignoring invalid resource key %v", yamlId))
 				continue
 			}
 			if len(yamlId.Metadata.Namespace) == 0 {
 				yamlId.Metadata.Namespace = "<none>"
 			}
+			logIt(fmt.Sprintf("%v", yamlId))
 			resourceId := ResourceId{
-				Group:     yamlId.APIVersion,
+				Group:     truncateVersion(yamlId.APIVersion),
 				Kind:      yamlId.Kind,
 				Name:      yamlId.Metadata.Name,
 				Namespace: yamlId.Metadata.Namespace,
 			}
 			ids[resourceId] = resourceSource
-			//ids = append(ids, resourceId)
-			//fmt.Printf("%v\n", yamlId)
 		}
 	}
 	return ids
+}
+
+func logIt(s string) {
+	if verboseLogging {
+		fmt.Println(s)
+	}
+}
+
+func truncateVersion(apiVersion string) string {
+	api := strings.Split(apiVersion, "/")
+	if len(api) != 2 {
+		return apiVersion
+	}
+	return api[0]
+}
+
+func getMinorRelease(release string) string {
+	xyz := strings.Split(release, ".")
+	if len(xyz) < 2 {
+		return release
+	}
+	return xyz[0] + "." + xyz[1]
 }
 
 func splitYaml(resources []byte) ([][]byte, error) {
@@ -219,30 +244,45 @@ func validKey(key ResourceIdYaml) bool {
 	return true
 }
 
-func checkIfOrphaned(resourceIds map[ResourceId]ResourceSource, currentOrphaned map[ResourceId]ResourceSource) map[ResourceId]ResourceSource {
+func checkIfOrphaned(resourceIds map[ResourceId]ResourceSource, currentOrphaned map[ResourceId]ResourceSource) {
 	for k, v := range resourceIds {
 		if _, ok := currentOrphaned[k]; !ok {
 			if _, ok = targetResources[k]; !ok {
 				currentOrphaned[k] = v
 			}
+		} else {
+			setLastInRelease(v.LastInRelease, currentOrphaned, k)
 		}
 	}
-	return currentOrphaned
 }
 
-func outputDeleteCandidates(dir string, resources map[ResourceId]ResourceSource) {
-	filePath := dir + "/delete-candidates.txt"
-	f, err := os.Create(filePath)
+func setLastInRelease(thisRelease string, currentOrphaned map[ResourceId]ResourceSource, key ResourceId) {
+	if thisRelVal, err := strconv.ParseFloat(thisRelease, 32); err == nil {
+		if val, err := strconv.ParseFloat(currentOrphaned[key].LastInRelease, 32); err == nil {
+			if thisRelVal > val {
+				currentOrphaned[key] = ResourceSource{
+					Release:       currentOrphaned[key].Release,
+					LastInRelease: thisRelease,
+					YamlFileName:  currentOrphaned[key].YamlFileName,
+				}
+			}
+		}
+	}
+}
+
+func outputDeleteCandidates(resources map[ResourceId]ResourceSource) {
+	f, err := os.Create(resultsFile)
 	if err != nil {
-		log.Fatalf("Unable to create file %s; err=%v", filePath, err)
+		log.Fatalf("Unable to create file %s; err=%v", resultsFile, err)
 	}
 	defer f.Close()
 	for k, v := range resources {
-		s := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\n",
-			k.Group, k.Kind, k.Name, k.Namespace, v.Release, v.YamlFileName)
+		s := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			k.Group, k.Kind, k.Name, k.Namespace, v.Release, v.LastInRelease, v.YamlFileName)
 		_, err := f.WriteString(s)
 		if err != nil {
-			log.Fatalf("Unable to write to file %s; err=%v", filePath, err)
+			log.Fatalf("Unable to write to file %s; err=%v", resultsFile, err)
 		}
 	}
+	fmt.Printf("Results file %s created\n", resultsFile)
 }

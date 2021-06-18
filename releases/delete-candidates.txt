@@ -1,1 +1,0 @@
-apps/v1	Deployment	machine-config-operatorXXX	openshift-machine-config-operator	4.1
