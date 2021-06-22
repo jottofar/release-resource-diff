@@ -164,9 +164,9 @@ func getReleaseResources(dir string) map[ResourceId]ResourceSource {
 			YamlFileName:  info.Name(),
 		}
 		logIt(fmt.Sprintf("%v", resourceSource))
-		var yamlId ResourceIdYaml
 
 		for _, byteSlice := range allByteSlices {
+			var yamlId ResourceIdYaml
 			err = yaml.Unmarshal(byteSlice, &yamlId)
 			if err != nil {
 				log.Fatalf("Unable to unmarshall yaml from file %s; err=%v", filename, err)
